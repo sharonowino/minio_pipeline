@@ -30,8 +30,8 @@ jobs:
         MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
         MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
         MINIO_SECURE: ${{ secrets.MINIO_SECURE }}
-        SERVICE_ALERTS_URL: ${{ vars.SERVICE_ALERTS_URL }}
-        TRIP_UPDATES_URL: ${{ vars.TRIP_UPDATES_URL }}
-        VEHICLE_URL: ${{ vars.VEHICLE_URL }}
+        GTFS_SERVICE_ALERTS_URL: ${{ vars.SERVICE_ALERTS_URL }}
+        GTFS_TRIP_UPDATES_URL: ${{ vars.TRIP_UPDATES_URL }}
+        GTFS_VEHICLE_URL: ${{ vars.VEHICLE_URL }}
       run: |
         python upload_script.py
