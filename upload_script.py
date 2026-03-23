@@ -19,12 +19,52 @@ MINIO_BUCKET = os.getenv("MINIO_BUCKET", "gtfs-data")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 
 
+def safe_get_field(obj, field_name, default=None):
+    """Safely get a field from a protobuf message, handling missing fields."""
+    if obj is None:
+        return default
+    if not hasattr(obj, field_name):
+        return default
+    try:
+        if obj.HasField(field_name):
+            return getattr(obj, field_name)
+    except ValueError:
+        # Field is not a singular field (might be repeated or not exist)
+        value = getattr(obj, field_name, default)
+        return value if value else default
+    return default
+
+
+def safe_get_attr(obj, attr_name, default=None):
+    """Safely get an attribute value from a protobuf message."""
+    if obj is None:
+        return default
+    if not hasattr(obj, attr_name):
+        return default
+    return getattr(obj, attr_name, default) or default
+
+
 def get_minio_client():
     if not MINIO_ACCESS_KEY or not MINIO_SECRET_KEY:
         raise ValueError("MINIO_ACCESS_KEY and MINIO_SECRET_KEY environment variables are required")
-    
+
+    if not MINIO_ENDPOINT:
+        raise ValueError("MINIO_ENDPOINT environment variable is required")
+
+    endpoint = MINIO_ENDPOINT
+    if endpoint.startswith(("http://", "https://")):
+        raise ValueError(
+            f"MINIO_ENDPOINT should not include scheme (http/https). "
+            f"Got: {endpoint}. Use format: hostname:port"
+        )
+    if "/" in endpoint:
+        raise ValueError(
+            f"MINIO_ENDPOINT should not include a path. "
+            f"Got: {endpoint}. Use format: hostname:port"
+        )
+
     return Minio(
-        MINIO_ENDPOINT,
+        endpoint,
         access_key=MINIO_ACCESS_KEY,
         secret_key=MINIO_SECRET_KEY,
         secure=MINIO_SECURE
@@ -55,58 +95,58 @@ def fetch_vehicle_positions():
             v = entity.vehicle
 
             # TripDescriptor
-            trip = v.trip if v.HasField("trip") else None
+            trip = safe_get_field(v, "trip")
 
             # VehicleDescriptor
-            vehicle = v.vehicle if v.HasField("vehicle") else None
+            vehicle = safe_get_field(v, "vehicle")
 
             # Position
-            pos = v.position if v.HasField("position") else None
+            pos = safe_get_field(v, "position")
 
             rows.append({
                 # Entity
                 "entity_id": entity.id,
 
                 # TripDescriptor
-                "trip_id": trip.trip_id if trip and trip.trip_id else None,
-                "route_id": trip.route_id if trip and trip.route_id else None,
-                "direction_id": trip.direction_id if trip and trip.HasField("direction_id") else None,
-                "start_time": trip.start_time if trip and trip.start_time else None,
-                "start_date": trip.start_date if trip and trip.start_date else None,
-                "schedule_relationship": trip.schedule_relationship if trip and trip.HasField("schedule_relationship") else None,
+                "trip_id": safe_get_attr(trip, "trip_id"),
+                "route_id": safe_get_attr(trip, "route_id"),
+                "direction_id": safe_get_field(trip, "direction_id"),
+                "start_time": safe_get_attr(trip, "start_time"),
+                "start_date": safe_get_attr(trip, "start_date"),
+                "schedule_relationship": safe_get_field(trip, "schedule_relationship"),
 
                 # VehicleDescriptor
-                "vehicle_id": vehicle.id if vehicle and vehicle.id else None,
-                "vehicle_label": vehicle.label if vehicle and vehicle.label else None,
-                "license_plate": vehicle.license_plate if vehicle and vehicle.license_plate else None,
-                "wheelchair_accessible": vehicle.wheelchair_accessible if vehicle and vehicle.HasField("wheelchair_accessible") else None,
+                "vehicle_id": safe_get_attr(vehicle, "id"),
+                "vehicle_label": safe_get_attr(vehicle, "label"),
+                "license_plate": safe_get_attr(vehicle, "license_plate"),
+                "wheelchair_accessible": safe_get_field(vehicle, "wheelchair_accessible"),
 
                 # Position
                 "latitude": pos.latitude if pos else None,
                 "longitude": pos.longitude if pos else None,
-                "bearing": pos.bearing if pos and pos.HasField("bearing") else None,
-                "odometer": pos.odometer if pos and pos.HasField("odometer") else None,
-                "speed": pos.speed if pos and pos.HasField("speed") else None,
+                "bearing": safe_get_field(pos, "bearing"),
+                "odometer": safe_get_field(pos, "odometer"),
+                "speed": safe_get_field(pos, "speed"),
 
                 # VehiclePosition fields
-                "current_stop_sequence": v.current_stop_sequence if v.HasField("current_stop_sequence") else None,
-                "stop_id": v.stop_id if v.stop_id else None,
-                "current_status": v.current_status if v.HasField("current_status") else None,
-                "timestamp": v.timestamp if v.HasField("timestamp") else None,
-                "congestion_level": v.congestion_level if v.HasField("congestion_level") else None,
-                "occupancy_status": v.occupancy_status if v.HasField("occupancy_status") else None,
-                "occupancy_percentage": v.occupancy_percentage if v.HasField("occupancy_percentage") else None,
+                "current_stop_sequence": safe_get_field(v, "current_stop_sequence"),
+                "stop_id": safe_get_attr(v, "stop_id"),
+                "current_status": safe_get_field(v, "current_status"),
+                "timestamp": safe_get_field(v, "timestamp"),
+                "congestion_level": safe_get_field(v, "congestion_level"),
+                "occupancy_status": safe_get_field(v, "occupancy_status"),
+                "occupancy_percentage": safe_get_field(v, "occupancy_percentage"),
 
-                # Multi-carriage details (flattened as JSON string)
+                # Multi-carriage details (newer field)
                 "multi_carriage_details": str([
                     {
-                        "id": c.id,
-                        "label": c.label,
-                        "occupancy_status": c.occupancy_status,
-                        "occupancy_percentage": c.occupancy_percentage,
-                        "carriage_sequence": c.carriage_sequence
+                        "id": safe_get_attr(c, "id"),
+                        "label": safe_get_attr(c, "label"),
+                        "occupancy_status": safe_get_field(c, "occupancy_status"),
+                        "occupancy_percentage": safe_get_field(c, "occupancy_percentage"),
+                        "carriage_sequence": safe_get_field(c, "carriage_sequence")
                     } for c in v.multi_carriage_details
-                ]) if v.multi_carriage_details else None,
+                ]) if hasattr(v, "multi_carriage_details") and v.multi_carriage_details else None,
 
                 "retrieved_at": datetime.utcnow()
             })
@@ -132,61 +172,66 @@ def fetch_trip_updates():
         if entity.HasField("trip_update"):
             tu = entity.trip_update
             trip = tu.trip
-            vehicle = tu.vehicle if tu.HasField("vehicle") else None
+            vehicle = safe_get_field(tu, "vehicle")
+
+            # TripProperties (newer field)
+            trip_properties = safe_get_field(tu, "trip_properties")
 
             for stu in tu.stop_time_update:
                 # StopTimeEvent - Arrival
-                arrival = stu.arrival if stu.HasField("arrival") else None
+                arrival = safe_get_field(stu, "arrival")
                 # StopTimeEvent - Departure
-                departure = stu.departure if stu.HasField("departure") else None
+                departure = safe_get_field(stu, "departure")
+                # StopTimeProperties (newer field)
+                stop_time_properties = safe_get_field(stu, "stop_time_properties")
 
                 rows.append({
                     # Entity
                     "entity_id": entity.id,
 
                     # TripDescriptor
-                    "trip_id": trip.trip_id if trip.trip_id else None,
-                    "route_id": trip.route_id if trip.route_id else None,
-                    "direction_id": trip.direction_id if trip.HasField("direction_id") else None,
-                    "start_time": trip.start_time if trip.start_time else None,
-                    "start_date": trip.start_date if trip.start_date else None,
-                    "schedule_relationship": trip.schedule_relationship if trip.HasField("schedule_relationship") else None,
+                    "trip_id": safe_get_attr(trip, "trip_id"),
+                    "route_id": safe_get_attr(trip, "route_id"),
+                    "direction_id": safe_get_field(trip, "direction_id"),
+                    "start_time": safe_get_attr(trip, "start_time"),
+                    "start_date": safe_get_attr(trip, "start_date"),
+                    "schedule_relationship": safe_get_field(trip, "schedule_relationship"),
 
                     # VehicleDescriptor
-                    "vehicle_id": vehicle.id if vehicle and vehicle.id else None,
-                    "vehicle_label": vehicle.label if vehicle and vehicle.label else None,
-                    "license_plate": vehicle.license_plate if vehicle and vehicle.license_plate else None,
+                    "vehicle_id": safe_get_attr(vehicle, "id"),
+                    "vehicle_label": safe_get_attr(vehicle, "label"),
+                    "license_plate": safe_get_attr(vehicle, "license_plate"),
 
                     # TripUpdate fields
-                    "trip_update_timestamp": tu.timestamp if tu.HasField("timestamp") else None,
-                    "delay": tu.delay if tu.HasField("delay") else None,
+                    "trip_update_timestamp": safe_get_field(tu, "timestamp"),
+                    "delay": safe_get_field(tu, "delay"),
 
-                    # TripProperties
-                    "trip_properties_trip_id": tu.trip_properties.trip_id if tu.HasField("trip_properties") and tu.trip_properties.trip_id else None,
-                    "trip_properties_start_date": tu.trip_properties.start_date if tu.HasField("trip_properties") and tu.trip_properties.start_date else None,
-                    "trip_properties_start_time": tu.trip_properties.start_time if tu.HasField("trip_properties") and tu.trip_properties.start_time else None,
-                    "trip_properties_shape_id": tu.trip_properties.shape_id if tu.HasField("trip_properties") and tu.trip_properties.shape_id else None,
+                    # TripProperties (newer fields)
+                    "trip_properties_trip_id": safe_get_attr(trip_properties, "trip_id"),
+                    "trip_properties_start_date": safe_get_attr(trip_properties, "start_date"),
+                    "trip_properties_start_time": safe_get_attr(trip_properties, "start_time"),
+                    "trip_properties_shape_id": safe_get_attr(trip_properties, "shape_id"),
 
                     # StopTimeUpdate
-                    "stop_sequence": stu.stop_sequence if stu.HasField("stop_sequence") else None,
-                    "stop_id": stu.stop_id if stu.stop_id else None,
-                    "stop_time_schedule_relationship": stu.schedule_relationship if stu.HasField("schedule_relationship") else None,
+                    "stop_sequence": safe_get_field(stu, "stop_sequence"),
+                    "stop_id": safe_get_attr(stu, "stop_id"),
+                    "stop_time_schedule_relationship": safe_get_field(stu, "schedule_relationship"),
 
                     # Arrival StopTimeEvent
-                    "arrival_delay": arrival.delay if arrival and arrival.HasField("delay") else None,
-                    "arrival_time": arrival.time if arrival and arrival.HasField("time") else None,
-                    "arrival_uncertainty": arrival.uncertainty if arrival and arrival.HasField("uncertainty") else None,
+                    "arrival_delay": safe_get_field(arrival, "delay"),
+                    "arrival_time": safe_get_field(arrival, "time"),
+                    "arrival_uncertainty": safe_get_field(arrival, "uncertainty"),
 
                     # Departure StopTimeEvent
-                    "departure_delay": departure.delay if departure and departure.HasField("delay") else None,
-                    "departure_time": departure.time if departure and departure.HasField("time") else None,
-                    "departure_uncertainty": departure.uncertainty if departure and departure.HasField("uncertainty") else None,
+                    "departure_delay": safe_get_field(departure, "delay"),
+                    "departure_time": safe_get_field(departure, "time"),
+                    "departure_uncertainty": safe_get_field(departure, "uncertainty"),
 
-                    # StopTimeProperties
-                    "assigned_stop_id": stu.stop_time_properties.assigned_stop_id if stu.HasField("stop_time_properties") and stu.stop_time_properties.assigned_stop_id else None,
+                    # StopTimeProperties (newer field)
+                    "assigned_stop_id": safe_get_attr(stop_time_properties, "assigned_stop_id"),
 
-                    # Departure/Arrival Occupancy
-                    "departure_occupancy_status": stu.departure_occupancy_status if stu.HasField("departure_occupancy_status") else None,
+                    # Departure/Arrival Occupancy (newer field)
+                    "departure_occupancy_status": safe_get_field(stu, "departure_occupancy_status"),
 
                     "retrieved_at": datetime.utcnow()
                 })
@@ -215,54 +260,75 @@ def fetch_service_alerts():
             # Active periods
             active_periods = [
                 {
-                    "start": period.start if period.HasField("start") else None,
-                    "end": period.end if period.HasField("end") else None
+                    "start": safe_get_field(period, "start"),
+                    "end": safe_get_field(period, "end")
                 } for period in alert.active_period
-            ]
+            ] if hasattr(alert, "active_period") else []
 
             # Informed entities (EntitySelector)
             informed_entities = []
-            for ie in alert.informed_entity:
-                informed_entities.append({
-                    "agency_id": ie.agency_id if ie.agency_id else None,
-                    "route_id": ie.route_id if ie.route_id else None,
-                    "route_type": ie.route_type if ie.HasField("route_type") else None,
-                    "direction_id": ie.direction_id if ie.HasField("direction_id") else None,
-                    "stop_id": ie.stop_id if ie.stop_id else None,
-                    "trip_id": ie.trip.trip_id if ie.HasField("trip") and ie.trip.trip_id else None,
-                    "trip_route_id": ie.trip.route_id if ie.HasField("trip") and ie.trip.route_id else None,
-                    "trip_direction_id": ie.trip.direction_id if ie.HasField("trip") and ie.trip.HasField("direction_id") else None,
-                    "trip_start_time": ie.trip.start_time if ie.HasField("trip") and ie.trip.start_time else None,
-                    "trip_start_date": ie.trip.start_date if ie.HasField("trip") and ie.trip.start_date else None,
-                })
+            if hasattr(alert, "informed_entity"):
+                for ie in alert.informed_entity:
+                    ie_trip = safe_get_field(ie, "trip")
+                    informed_entities.append({
+                        "agency_id": safe_get_attr(ie, "agency_id"),
+                        "route_id": safe_get_attr(ie, "route_id"),
+                        "route_type": safe_get_field(ie, "route_type"),
+                        "direction_id": safe_get_field(ie, "direction_id"),
+                        "stop_id": safe_get_attr(ie, "stop_id"),
+                        "trip_id": safe_get_attr(ie_trip, "trip_id"),
+                        "trip_route_id": safe_get_attr(ie_trip, "route_id"),
+                        "trip_direction_id": safe_get_field(ie_trip, "direction_id"),
+                        "trip_start_time": safe_get_attr(ie_trip, "start_time"),
+                        "trip_start_date": safe_get_attr(ie_trip, "start_date"),
+                    })
 
             # TranslatedString - extract all translations
             def extract_translations(translated_string):
-                return [
+                if not translated_string or not hasattr(translated_string, "translation"):
+                    return None
+                translations = [
                     {
                         "text": t.text,
-                        "language": t.language if t.language else None
+                        "language": safe_get_attr(t, "language")
                     } for t in translated_string.translation
-                ] if translated_string.translation else None
+                ]
+                return translations if translations else None
 
-            # TranslatedImage
-            def extract_images(translated_image):
-                return [
-                    {
-                        "url": img.localized_image[0].url if img.localized_image else None,
-                        "media_type": img.localized_image[0].media_type if img.localized_image else None,
-                        "language": img.localized_image[0].language if img.localized_image else None
-                    } for img in translated_image
-                ] if translated_image else None
+            # TranslatedImage (newer field)
+            def extract_images(image_field):
+                if not image_field or not hasattr(image_field, "localized_image"):
+                    return None
+                if not image_field.localized_image:
+                    return None
+                images = []
+                for img in image_field.localized_image:
+                    images.append({
+                        "url": safe_get_attr(img, "url"),
+                        "media_type": safe_get_attr(img, "media_type"),
+                        "language": safe_get_attr(img, "language")
+                    })
+                return images if images else None
+
+            # Safely get translated string fields
+            header_text = safe_get_field(alert, "header_text")
+            description_text = safe_get_field(alert, "description_text")
+            url_field = safe_get_field(alert, "url")
+            tts_header_text = safe_get_field(alert, "tts_header_text")
+            tts_description_text = safe_get_field(alert, "tts_description_text")
+            image_field = safe_get_field(alert, "image")
+            image_alternative_text = safe_get_field(alert, "image_alternative_text")
+            cause_detail = safe_get_field(alert, "cause_detail")
+            effect_detail = safe_get_field(alert, "effect_detail")
 
             rows.append({
                 # Entity
                 "entity_id": entity.id,
 
                 # Alert fields
-                "cause": alert.cause if alert.HasField("cause") else None,
-                "effect": alert.effect if alert.HasField("effect") else None,
-                "severity_level": alert.severity_level if alert.HasField("severity_level") else None,
+                "cause": safe_get_field(alert, "cause"),
+                "effect": safe_get_field(alert, "effect"),
+                "severity_level": safe_get_field(alert, "severity_level"),
 
                 # Active periods
                 "active_periods": str(active_periods) if active_periods else None,
@@ -271,19 +337,19 @@ def fetch_service_alerts():
                 "informed_entities": str(informed_entities) if informed_entities else None,
 
                 # TranslatedString fields
-                "header_text": str(extract_translations(alert.header_text)),
-                "description_text": str(extract_translations(alert.description_text)),
-                "url": str(extract_translations(alert.url)) if alert.url.translation else None,
-                "tts_header_text": str(extract_translations(alert.tts_header_text)) if alert.tts_header_text.translation else None,
-                "tts_description_text": str(extract_translations(alert.tts_description_text)) if alert.tts_description_text.translation else None,
+                "header_text": str(extract_translations(header_text)) if extract_translations(header_text) else None,
+                "description_text": str(extract_translations(description_text)) if extract_translations(description_text) else None,
+                "url": str(extract_translations(url_field)) if extract_translations(url_field) else None,
+                "tts_header_text": str(extract_translations(tts_header_text)) if extract_translations(tts_header_text) else None,
+                "tts_description_text": str(extract_translations(tts_description_text)) if extract_translations(tts_description_text) else None,
 
-                # TranslatedImage
-                "image": str(extract_images(alert.image.localized_image)) if alert.image.localized_image else None,
-                "image_alternative_text": str(extract_translations(alert.image_alternative_text)) if alert.image_alternative_text.translation else None,
+                # TranslatedImage (newer fields)
+                "image": str(extract_images(image_field)) if extract_images(image_field) else None,
+                "image_alternative_text": str(extract_translations(image_alternative_text)) if extract_translations(image_alternative_text) else None,
 
-                # Cause/Effect detail
-                "cause_detail": str(extract_translations(alert.cause_detail)) if alert.cause_detail.translation else None,
-                "effect_detail": str(extract_translations(alert.effect_detail)) if alert.effect_detail.translation else None,
+                # Cause/Effect detail (newer fields)
+                "cause_detail": str(extract_translations(cause_detail)) if extract_translations(cause_detail) else None,
+                "effect_detail": str(extract_translations(effect_detail)) if extract_translations(effect_detail) else None,
 
                 "retrieved_at": datetime.utcnow()
             })
