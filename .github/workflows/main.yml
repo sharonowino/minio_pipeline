@@ -25,5 +25,13 @@ jobs:
         pip install pandas requests gtfs-realtime-bindings minio pyarrow 
 
     - name: Run GTFS ingestion script
+      env:
+        MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+        MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
+        MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+        MINIO_SECURE: ${{ secrets.MINIO_SECURE }}
+        SERVICE_ALERTS_URL: ${{ vars.SERVICE_ALERTS_URL }}
+        TRIP_UPDATES_URL: ${{ vars.TRIP_UPDATES_URL }}
+        VEHICLE_URL: ${{ vars.VEHICLE_URL }}
       run: |
         python upload_script.py
